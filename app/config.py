@@ -51,6 +51,13 @@ class Settings:
         )
     )
 
+    # "Think first": the Show-solution button only works N minutes after the puzzle was posted.
+    solution_lock_minutes: int = field(default_factory=lambda: int(os.getenv("SOLUTION_LOCK_MINUTES", "10")))
+    # Reply when someone asks too early. {minutes} = lock length, {left} = minutes remaining.
+    lock_message: str = field(default_factory=lambda: os.getenv(
+        "LOCK_MESSAGE",
+        "🤔 คิดก่อนดิ! ให้เวลา {minutes} นาทีถึงจะเฉลย\n⏳ เหลืออีก {left} นาที"))
+
     # Daily push
     daily_push_enabled: bool = field(default_factory=lambda: _bool("DAILY_PUSH_ENABLED", True))
     daily_push_time: str = field(default_factory=lambda: os.getenv("DAILY_PUSH_TIME", "08:00"))  # HH:MM

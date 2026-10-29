@@ -37,6 +37,7 @@ def category_buttons() -> dict:
 
 def puzzle_bubble(p: Puzzle, title: str) -> dict:
     img = f"{settings.base_url}/board/{p.id}.png"
+    play = f"{settings.base_url}/play/{p.id}"
     nice_themes = ", ".join(t for t in p.themes[:4])
     return {
         "type": "bubble",
@@ -51,8 +52,8 @@ def puzzle_bubble(p: Puzzle, title: str) -> dict:
         },
         "hero": {
             "type": "image", "url": img, "size": "full", "aspectRatio": "1:1", "aspectMode": "cover",
-            # Tap the board → open the full-size picture (handy for zooming on phones)
-            "action": {"type": "uri", "uri": img},
+            # Tap the board → open the interactive board
+            "action": {"type": "uri", "uri": play},
         },
         "body": {
             "type": "box", "layout": "vertical", "spacing": "sm", "paddingAll": "md",
@@ -66,10 +67,9 @@ def puzzle_bubble(p: Puzzle, title: str) -> dict:
         "footer": {
             "type": "box", "layout": "vertical", "spacing": "sm",
             "contents": [
-                _postback("💡 Show solution", {"a": "sol", "id": p.id},
-                          display="💡 Show solution", style="primary", color=GREEN),
-                {"type": "button", "style": "link", "height": "sm",
-                 "action": {"type": "uri", "label": "Solve on Lichess ↗", "uri": p.lichess_url}},
+                {"type": "button", "style": "primary", "height": "sm", "color": GREEN,
+                 "action": {"type": "uri", "label": "♟ Play on board", "uri": play}},
+                _postback("💡 Show solution", {"a": "sol", "id": p.id}, display="💡 Show solution"),
                 {"type": "separator", "margin": "md"},
                 {"type": "text", "text": "Want another? Pick a type:", "size": "xs",
                  "color": MUTED, "margin": "md"},

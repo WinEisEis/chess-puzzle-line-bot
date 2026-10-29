@@ -9,7 +9,12 @@ from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from pathlib import Path
+
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from linebot.v3 import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
 
@@ -43,6 +48,11 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Chess Puzzle LINE Bot", lifespan=lifespan)
 
+APP_DIR = Path(__file__).parent
+app.mount("/static/pieces", StaticFiles(directory=APP_DIR / "assets" / "pieces"), name="pieces")
+app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+PLAY_HTML = (APP_DIR / "static" / "play.html").read_text("utf-8")
+
 
 @app.get("/")
 async def health():
@@ -73,6 +83,46 @@ async def board_image(puzzle_id: str):
     png = render_png(p.fen, p.last_move)
     return Response(png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+# ------------------------------------------------------------------ interactive board page
+async def _puzzle_or_404(puzzle_id: str):
+    try:
+        return await lichess.by_id(puzzle_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Unknown puzzle")
+
+
+@app.get("/play/{puzzle_id}", response_class=HTMLResponse)
+async def play_page(puzzle_id: str):
+    """Opens inside LINE's in-app browser when someone taps "Play on board"."""
+    if not puzzle_id.isalnum():
+        raise HTTPException(status_code=404)
+    return PLAY_HTML.replace("__PUZZLE_ID__", puzzle_id)
+
+
+@app.get("/api/puzzle/{puzzle_id}")
+async def api_puzzle(puzzle_id: str):
+    p = await _puzzle_or_404(puzzle_id)
+    # Note: no solution here — moves are checked on the server.
+    return {"id": p.id, "fen": p.fen, "last_move": p.last_move, "rating": p.rating,
+            "themes": p.themes, "lichess_url": p.lichess_url}
+
+
+class CheckBody(BaseModel):
+    line: list[str]
+
+
+@app.post("/api/puzzle/{puzzle_id}/check")
+async def api_check(puzzle_id: str, body: CheckBody):
+    p = await _puzzle_or_404(puzzle_id)
+    return lichess.check_line(p, body.line[:40])
+
+
+@app.get("/api/puzzle/{puzzle_id}/hint")
+async def api_hint(puzzle_id: str, ply: int = 0):
+    p = await _puzzle_or_404(puzzle_id)
+    return {"square": lichess.hint_square(p, ply)}
 
 
 @app.post("/admin/push-daily")

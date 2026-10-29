@@ -42,6 +42,8 @@ def fake_lichess(monkeypatch, tmp_path):
     object.__setattr__(settings, "data_dir", tmp_path)
     lichess._cache.clear()
     line.sent.clear()
+    from app import bot
+    bot._shown_at.clear()   # each test starts with no solution timers
 
     async def fake_get(path, params=None):
         if path == "/puzzle/daily":
@@ -192,3 +194,43 @@ def test_stateless_token_is_issued_and_renewed(monkeypatch):
         assert l._config.access_token == "tok2"
     finally:
         object.__setattr__(settings, "channel_id", "")
+
+
+# --------------------------------------------------------------------------- solution lock
+def test_solution_locked_for_10_minutes(monkeypatch):
+    from app import bot
+    bot._shown_at.clear()
+    now = [1_000_000.0]
+    monkeypatch.setattr(bot.time, "time", lambda: now[0])
+    with TestClient(app) as c:
+        signed_post(c, [ev("postback", postback={"data": "a=new&t=endgame"})])   # posts BLK01
+        signed_post(c, [ev("postback", postback={"data": "a=sol&id=BLK01"})])
+        assert "10 นาที" in line.sent[-1][2][0].text and "เหลืออีก 10" in line.sent[-1][2][0].text
+        now[0] += 7 * 60 + 5
+        signed_post(c, [ev("postback", postback={"data": "a=sol&id=BLK01"})])
+        assert "เหลืออีก 3" in line.sent[-1][2][0].text
+        now[0] += 3 * 60
+        signed_post(c, [ev("postback", postback={"data": "a=sol&id=BLK01"})])
+        assert "Qg5" in line.sent[-1][2][0].alt_text                            # unlocked
+        # Another group never saw it via the bot → not locked there
+        e = ev("postback", postback={"data": "a=sol&id=SCH01"})
+        e["source"]["groupId"] = "Cother"
+        signed_post(c, [e])
+        assert "Qxf7#" in line.sent[-1][2][0].alt_text
+
+
+# --------------------------------------------------------------------------- play page API
+def test_play_api_hides_solution_and_checks_moves():
+    with TestClient(app) as c:
+        assert "__PUZZLE_ID__" not in c.get("/play/BLK01").text
+        info = c.get("/api/puzzle/BLK01").json()
+        assert "solution" not in info and info["fen"].split()[1] == "b"
+        r = c.post("/api/puzzle/BLK01/check", json={"line": ["d8g5"]}).json()
+        assert r == {"correct": True, "reply": "e5f7", "done": False}
+        r = c.post("/api/puzzle/BLK01/check", json={"line": ["d8h4"]}).json()
+        assert r["correct"] is False
+        r = c.post("/api/puzzle/BLK01/check", json={"line": ["d8g5", "e5f7", "g5g2"]}).json()
+        assert r["done"] is True
+        assert c.get("/api/puzzle/BLK01/hint?ply=0").json() == {"square": "d8"}
+        assert c.get("/static/pieces/wK.png").status_code == 200
+        assert c.get("/static/chess.js").status_code == 200

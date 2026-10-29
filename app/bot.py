@@ -168,15 +168,40 @@ def menu_message() -> FlexMessage:
 
 
 # --------------------------------------------------------------------------- actions
-async def make_category_puzzle(theme: str) -> FlexMessage:
+async def make_category_puzzle(theme: str) -> tuple[FlexMessage, str]:
     p = await lichess.next_by_theme(theme)
     label = settings.categories.get(theme, theme.title())
-    return puzzle_message(p, f"♞ {label} Puzzle")
+    return puzzle_message(p, f"♞ {label} Puzzle"), p.id
 
 
-async def make_daily_puzzle() -> FlexMessage:
+async def make_daily_puzzle() -> tuple[FlexMessage, str]:
     p = await lichess.daily()
-    return puzzle_message(p, "📅 Daily Puzzle")
+    return puzzle_message(p, "📅 Daily Puzzle"), p.id
+
+
+# ---- "think first" lock: no solution until the puzzle has been out for N minutes ----
+_shown_at: dict[tuple[str, str], float] = {}   # (chat id, puzzle id) → time first posted
+
+
+def mark_shown(chat: str | None, puzzle_id: str) -> None:
+    if chat:
+        _shown_at.setdefault((chat, puzzle_id), time.time())
+        if len(_shown_at) > 2000:              # keep memory bounded
+            _shown_at.pop(next(iter(_shown_at)))
+
+
+def seconds_until_solution(chat: str | None, puzzle_id: str) -> int:
+    """0 = solution may be shown. Unknown puzzles (e.g. after a server restart) are not locked."""
+    t = _shown_at.get((chat, puzzle_id)) if chat else None
+    if t is None:
+        return 0
+    return max(0, int(t + settings.solution_lock_minutes * 60 - time.time()))
+
+
+def lock_message(seconds_left: int) -> TextMessage:
+    mins = max(1, -(-seconds_left // 60))   # round up
+    return TextMessage(text=settings.lock_message.format(
+        minutes=settings.solution_lock_minutes, left=mins))
 
 
 async def push_daily_to_all() -> dict:
@@ -185,11 +210,12 @@ async def push_daily_to_all() -> dict:
     if not groups:
         log.warning("No groups registered yet – invite the bot to a group first.")
         return {"sent": 0, "groups": []}
-    msg = await make_daily_puzzle()
+    msg, pid = await make_daily_puzzle()
     ok = []
     for gid in groups:
         try:
             await line.push(gid, [msg])
+            mark_shown(gid, pid)
             ok.append(gid)
         except Exception:  # one bad group shouldn't stop the others
             log.exception("Push to %s failed", gid)
@@ -200,6 +226,26 @@ async def push_daily_to_all() -> dict:
 def _group_id(event) -> str | None:
     src = getattr(event, "source", None)
     return src.group_id if isinstance(src, GroupSource) else None
+
+
+def _chat_id(event) -> str | None:
+    """Group, multi-person room, or 1:1 user — whatever chat the event came from."""
+    src = getattr(event, "source", None)
+    return (getattr(src, "group_id", None) or getattr(src, "room_id", None)
+            or getattr(src, "user_id", None))
+
+
+async def _reply_puzzle(event, build) -> None:
+    """Fetch a puzzle, reply with its card, and start its solution timer for this chat."""
+    try:
+        msg, pid = await build()
+    except Exception:
+        log.exception("Failed to fetch puzzle")
+        await line.reply(event.reply_token,
+                         [TextMessage(text="😵 Lichess didn't answer. Please try again in a moment.")])
+        return
+    await line.reply(event.reply_token, [msg])
+    mark_shown(_chat_id(event), pid)
 
 
 async def _safe_reply(token: str, build) -> None:
@@ -236,9 +282,9 @@ async def handle_event(event) -> None:
         if cmd is None:
             return  # normal chat (no "/chess" prefix) → stay quiet
         if cmd in settings.categories:
-            await _safe_reply(event.reply_token, lambda: _one(make_category_puzzle(cmd)))
+            await _reply_puzzle(event, lambda: make_category_puzzle(cmd))
         elif cmd in DAILY_WORDS:
-            await _safe_reply(event.reply_token, lambda: _one(make_daily_puzzle()))
+            await _reply_puzzle(event, make_daily_puzzle)
         elif cmd in HELP_WORDS:
             await line.reply(event.reply_token, [menu_message()])
         else:  # "/chess something-unknown" → show how to use it
@@ -248,12 +294,16 @@ async def handle_event(event) -> None:
         data = {k: v[0] for k, v in parse_qs(event.postback.data).items()}
         action = data.get("a")
         if action == "sol" and data.get("id"):
-            await _safe_reply(event.reply_token,
-                              lambda: _one_sync(lichess.by_id(data["id"]), solution_message))
+            left = seconds_until_solution(_chat_id(event), data["id"])
+            if left > 0:
+                await line.reply(event.reply_token, [lock_message(left)])
+            else:
+                await _safe_reply(event.reply_token,
+                                  lambda: _one_sync(lichess.by_id(data["id"]), solution_message))
         elif action == "new" and data.get("t"):
-            await _safe_reply(event.reply_token, lambda: _one(make_category_puzzle(data["t"])))
+            await _reply_puzzle(event, lambda: make_category_puzzle(data["t"]))
         elif action == "daily":
-            await _safe_reply(event.reply_token, lambda: _one(make_daily_puzzle()))
+            await _reply_puzzle(event, make_daily_puzzle)
 
 
 async def _one(coro) -> list:

@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Chess Puzzle</title>
+<style>
+  :root {
+    --light: #f0d9b5; --dark: #b58863;
+    --hl-light: #cdd26a; --hl-dark: #aaa23a;
+    --sel: rgba(20, 85, 30, .5);
+    --bg: #262421; --panel: #312e2b; --text: #e8e6e3; --muted: #9e9b98;
+    --green: #629924; --red: #c33;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 12px 12px 24px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  #board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; aspect-ratio: 1;
+           border-radius: 4px; overflow: hidden; user-select: none; touch-action: manipulation; }
+  .sq { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; }
+  .sq.l { background: var(--light); } .sq.d { background: var(--dark); }
+  .sq.l.last { background: var(--hl-light); } .sq.d.last { background: var(--hl-dark); }
+  .sq.sel { box-shadow: inset 0 0 0 100vmax var(--sel); }
+  .sq.hint { box-shadow: inset 0 0 0 4px #1e88e5; }
+  .sq.bad { box-shadow: inset 0 0 0 100vmax rgba(204, 51, 51, .55); }
+  .sq img { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .sq .dot { position: absolute; width: 30%; height: 30%; border-radius: 50%; background: rgba(20, 85, 30, .5); }
+  .sq .ring { position: absolute; inset: 0; border-radius: 50%; box-shadow: inset 0 0 0 5px rgba(20, 85, 30, .55); }
+  .coord { position: absolute; font-size: 11px; font-weight: 700; pointer-events: none; }
+  .coord.r { top: 2px; left: 3px; } .coord.f { bottom: 1px; right: 3px; }
+  .sq.l .coord { color: var(--dark); } .sq.d .coord { color: var(--light); }
+  #status { margin: 12px 0; padding: 12px 14px; border-radius: 8px; background: var(--panel); font-weight: 600; min-height: 48px; }
+  #status.ok { background: #2e4a17; } #status.bad { background: #4a1f1f; } #status.win { background: var(--green); color: #fff; }
+  .row { display: flex; gap: 8px; }
+  button, .btn { flex: 1; padding: 12px; border: 0; border-radius: 8px; font: inherit; font-weight: 600;
+                 background: var(--panel); color: var(--text); text-align: center; text-decoration: none; }
+  button:active, .btn:active { filter: brightness(1.2); }
+  .foot { margin-top: 14px; text-align: center; color: var(--muted); font-size: 12px; }
+  .foot a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Chess Puzzle</h1>
+    <span class="meta" id="meta"></span>
+  </header>
+  <div id="board"></div>
+  <div id="status">Loading…</div>
+  <div class="row">
+    <button id="hintBtn">💡 Hint</button>
+    <button id="resetBtn">↺ Restart</button>
+  </div>
+  <div class="foot">Tap a piece, then tap where it should go. · <a id="lichess" href="#">Open on Lichess</a></div>
+</div>
+
+<script src="/static/chess.js"></script>
+<script>
+const PUZZLE_ID = "__PUZZLE_ID__";
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+let P, game, line, selected, lastMove, playerColor, busy, done, tries, hintSq, badSq;
+
+function setStatus(text, cls = "") { statusEl.textContent = text; statusEl.className = cls; }
+const sideName = c => (c === "w" ? "White" : "Black");
+
+async function load() {
+  const r = await fetch(`/api/puzzle/${PUZZLE_ID}`);
+  if (!r.ok) { setStatus("Puzzle not found 😢", "bad"); return; }
+  P = await r.json();
+  document.getElementById("meta").textContent = `Rating ${P.rating}`;
+  document.getElementById("lichess").href = P.lichess_url;
+  reset();
+}
+
+function reset() {
+  game = new Chess(P.fen);
+  playerColor = game.turn();
+  line = []; selected = null; busy = false; done = false; tries = 0; hintSq = null; badSq = null;
+  lastMove = P.last_move ? [P.last_move.slice(0, 2), P.last_move.slice(2, 4)] : null;
+  document.getElementById("title").textContent = `${sideName(playerColor)} to move`;
+  setStatus(`Find the best move for ${sideName(playerColor)}.`);
+  render();
+}
+
+function squares() {
+  const files = "abcdefgh", out = [];
+  for (let row = 0; row < 8; row++)
+    for (let col = 0; col < 8; col++) {
+      const flip = playerColor === "b";
+      const f = flip ? 7 - col : col, r = flip ? row : 7 - row;
+      out.push({ sq: files[f] + (r + 1), f, r, row, col });
+    }
+  return out;
+}
+
+function render() {
+  const targets = selected ? game.moves({ square: selected, verbose: true }) : [];
+  boardEl.innerHTML = "";
+  for (const s of squares()) {
+    const el = document.createElement("div");
+    const light = (s.f + s.r) % 2 === 1;
+    el.className = "sq " + (light ? "l" : "d");
+    if (lastMove && lastMove.includes(s.sq)) el.classList.add("last");
+    if (s.sq === selected) el.classList.add("sel");
+    if (s.sq === hintSq) el.classList.add("hint");
+    if (s.sq === badSq) el.classList.add("bad");
+    const pc = game.get(s.sq);
+    if (pc) {
+      const img = document.createElement("img");
+      img.src = `/static/pieces/${pc.color}${pc.type.toUpperCase()}.png`;
+      img.alt = pc.color + pc.type;
+      el.appendChild(img);
+    }
+    const t = targets.find(m => m.to === s.sq);
+    if (t) {
+      const mark = document.createElement("span");
+      mark.className = pc ? "ring" : "dot";
+      el.appendChild(mark);
+    }
+    if (s.col === 0) el.insertAdjacentHTML("beforeend", `<span class="coord r">${s.r + 1}</span>`);
+    if (s.row === 7) el.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[s.f]}</span>`);
+    el.addEventListener("click", () => onTap(s.sq));
+    boardEl.appendChild(el);
+  }
+}
+
+function onTap(sq) {
+  if (busy || done || game.turn() !== playerColor) return;
+  const pc = game.get(sq);
+  if (selected) {
+    const legal = game.moves({ square: selected, verbose: true }).find(m => m.to === sq);
+    if (legal) { tryMove(selected, sq); return; }
+  }
+  selected = pc && pc.color === playerColor ? sq : null;
+  render();
+}
+
+async function tryMove(from, to) {
+  const mv = game.move({ from, to, promotion: "q" });
+  if (!mv) return;
+  const uci = from + to + (mv.promotion || "");
+  selected = null; hintSq = null; lastMove = [from, to]; busy = true;
+  render();
+
+  let res;
+  try {
+    const r = await fetch(`/api/puzzle/${PUZZLE_ID}/check`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line: [...line, uci] }),
+    });
+    res = await r.json();
+  } catch (e) {
+    game.undo(); busy = false; render();
+    setStatus("Connection problem. Try again.", "bad"); return;
+  }
+
+  if (!res.correct) {
+    tries++;
+    badSq = to;
+    setStatus(`❌ ${mv.san} isn't the best move. Try again!`, "bad");
+    setTimeout(() => {
+      game.undo(); badSq = null;
+      lastMove = line.length ? [line.at(-1).slice(0, 2), line.at(-1).slice(2, 4)]
+                             : (P.last_move ? [P.last_move.slice(0, 2), P.last_move.slice(2, 4)] : null);
+      busy = false; render();
+    }, 700);
+    return;
+  }
+
+  line.push(uci);
+  if (res.done && !res.reply) return win();
+  setStatus(`✅ ${mv.san} — correct!`, "ok");
+  if (res.reply) {
+    await new Promise(r => setTimeout(r, 500));
+    const rm = game.move({ from: res.reply.slice(0, 2), to: res.reply.slice(2, 4), promotion: res.reply[4] });
+    line.push(res.reply);
+    lastMove = [res.reply.slice(0, 2), res.reply.slice(2, 4)];
+    render();
+    if (res.done) return win();
+    setStatus(`✅ Correct! Opponent played ${rm.san}. Keep going…`, "ok");
+  }
+  busy = false;
+}
+
+function win() {
+  done = true; busy = false; render();
+  setStatus(tries === 0 ? "🎉 Solved on the first try!" : `🎉 Solved! (${tries} wrong ${tries === 1 ? "try" : "tries"})`, "win");
+}
+
+document.getElementById("resetBtn").onclick = () => P && reset();
+document.getElementById("hintBtn").onclick = async () => {
+  if (!P || done || busy) return;
+  const r = await fetch(`/api/puzzle/${PUZZLE_ID}/hint?ply=${line.length}`);
+  const h = await r.json();
+  if (h.square) { hintSq = h.square; render(); setStatus("💡 Move the highlighted piece."); }
+};
+
+load();
+</script>
+</body>
+</html>

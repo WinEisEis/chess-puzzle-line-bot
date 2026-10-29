@@ -93,7 +93,8 @@ Try these in the group:
 | Type / tap | What happens |
 |---|---|
 | tap **Opening / Middlegame / Endgame** | new puzzle of that type |
-| tap **💡 Show solution** | bot replies with the answer, move by move |
+| tap **♟ Play on board** (or the board picture) | opens an interactive board in LINE: tap a piece, tap a square; wrong moves are rejected, the opponent replies automatically |
+| tap **💡 Show solution** | the answer, move by move, but only 10 minutes after the puzzle was posted (`SOLUTION_LOCK_MINUTES`, `LOCK_MESSAGE` in `.env`) |
 | `/chess` | shows the menu card |
 | `/chess daily` | today's Lichess daily puzzle |
 | `/chess opening` · `/chess middlegame` · `/chess endgame` | same as the buttons |
@@ -135,19 +136,22 @@ If you'd rather each person check privately, players can use **Solve on Lichess 
 - Button taps, text commands, and the join greeting are **replies, which are free and unlimited**.
 - If you go over the limit, the daily push fails (the bot logs an error), but replies keep working.
 
-## Run it 24/7 for free (later)
+## Run it 24/7 for free (Render + cron-job.org)
 
-Your laptop has to stay on while the bot runs. When you're ready to host it:
+1. Push this folder to a **private GitHub repo** (`.env` is git-ignored, so your keys stay local).
+2. [render.com](https://render.com) → **New → Blueprint** → pick the repo. `render.yaml` sets everything up
+   (free plan, Singapore region). Fill in when asked:
+   `LINE_CHANNEL_ID`, `LINE_CHANNEL_SECRET`, `GROUP_IDS`, and `BASE_URL` (put any value first,
+   then change it to `https://<service>.onrender.com` once Render shows the address).
+3. LINE console → Webhook URL = `https://<service>.onrender.com/callback` → Verify.
+4. [cron-job.org](https://cron-job.org) (free), two jobs:
+   - **Keep awake:** `GET https://<service>.onrender.com/` every 10 minutes
+     (free Render services sleep after 15 idle minutes and take ~1 min to wake).
+   - **Daily puzzle:** `POST https://<service>.onrender.com/admin/push-daily`, header
+     `X-Admin-Key: <ADMIN_KEY from Render → Environment>`, every day 08:00, time zone Asia/Bangkok.
 
-- **Render / Koyeb free web service**: start command `uvicorn app.main:app --host 0.0.0.0 --port $PORT`,
-  and copy your `.env` values into the dashboard. Free instances sleep when idle, so:
-  - set `DAILY_PUSH_ENABLED=false` and trigger the daily post from a free cron
-    ([cron-job.org](https://cron-job.org) or a GitHub Actions schedule) with
-    `POST https://<app>/admin/push-daily` + `X-Admin-Key` header. The request also wakes the server.
-  - their disk is wiped on restart, so put your group ID(s) in `GROUP_IDS`
-    (get them from `GET /admin/groups` while testing locally).
-- The first button tap after a long idle can be slow or missed while the server wakes up; tap again.
-  (A free uptime pinger hitting `GET /` every 10 minutes keeps it awake.)
+Notes: one always-awake service uses ~744 of the 750 free hours per month, so keep it as your only
+always-awake free Render service. The disk is wiped on restart, which is why `GROUP_IDS` is set.
 
 ## Project layout
 

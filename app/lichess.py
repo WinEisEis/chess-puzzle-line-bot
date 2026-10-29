@@ -51,6 +51,49 @@ class Puzzle:
         return out
 
 
+
+def check_line(p: "Puzzle", line: list[str]) -> dict:
+    """Check moves played on the web board against the solution.
+
+    `line` = every move so far (player moves + the replies the server sent back), in UCI.
+    Returns {"correct": bool, "reply": uci|None, "done": bool}. The solution itself is never
+    sent to the browser, so nobody can peek at it in the page source.
+    Like Lichess, any move that gives checkmate is accepted even if it's not the listed one.
+    """
+    board = chess.Board(p.fen)
+    sol = p.solution
+    for i, uci in enumerate(line):
+        try:
+            mv = chess.Move.from_uci(uci)
+        except ValueError:
+            return {"correct": False, "reply": None, "done": False}
+        if i >= len(sol) or mv not in board.legal_moves:
+            return {"correct": False, "reply": None, "done": False}
+        expected = sol[i]
+        if uci != expected and i % 2 == 0 and uci[:4] == expected[:4]:
+            uci, mv = expected, chess.Move.from_uci(expected)  # same move, other promotion piece
+        if uci != expected:
+            if i % 2 == 0:  # player's move: alternative mate is fine
+                board.push(mv)
+                ok = board.is_checkmate()
+                return {"correct": ok, "reply": None, "done": ok}
+            return {"correct": False, "reply": None, "done": False}  # tampered reply
+        board.push(mv)
+    n = len(line)
+    if n >= len(sol):
+        return {"correct": True, "reply": None, "done": True}
+    reply = sol[n] if n % 2 == 1 else None
+    done = n + 1 >= len(sol) if reply else False
+    return {"correct": True, "reply": reply, "done": done}
+
+
+def hint_square(p: "Puzzle", ply: int) -> str | None:
+    """Square of the piece the player should move next."""
+    if 0 <= ply < len(p.solution) and ply % 2 == 0:
+        return p.solution[ply][:2]
+    return None
+
+
 def _replay(pgn: str, plies: int | None) -> tuple[chess.Board, str | None]:
     game = chess.pgn.read_game(io.StringIO(pgn))
     board = game.board() if game else chess.Board()
