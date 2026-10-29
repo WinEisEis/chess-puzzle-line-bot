@@ -1,0 +1,264 @@
+"""What the bot does when something happens in LINE."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from urllib.parse import parse_qs
+
+import certifi  # trusted CA list, so HTTPS works even if macOS Python has no certificates
+import httpx
+from linebot.v3.messaging import (
+    AsyncApiClient,
+    AsyncMessagingApi,
+    Configuration,
+    FlexContainer,
+    FlexMessage,
+    PushMessageRequest,
+    ReplyMessageRequest,
+    TextMessage,
+)
+from linebot.v3.webhooks import (
+    FollowEvent,
+    GroupSource,
+    JoinEvent,
+    LeaveEvent,
+    MessageEvent,
+    PostbackEvent,
+    TextMessageContent,
+)
+
+from . import cards, lichess, store
+from .config import settings
+
+log = logging.getLogger("bot")
+
+HELP_WORDS = {"", "menu", "help", "เมนู", "ช่วย"}
+DAILY_WORDS = {"daily", "today", "วันนี้"}
+THAI_ALIASES = {"เปิดเกม": "opening", "กลางเกม": "middlegame", "ท้ายเกม": "endgame", "จบเกม": "endgame"}
+
+
+def parse_command(text: str) -> str | None:
+    """Return what comes after the command prefix, or None if the message isn't for the bot.
+
+    "/chess endgame" → "endgame",  "/chess" → "",  "endgame" → None (ignored)
+    """
+    t = text.strip().lower()
+    for prefix in settings.command_prefixes:
+        if t == prefix or t.startswith(prefix + " "):
+            arg = t[len(prefix):].strip()
+            return THAI_ALIASES.get(arg, arg)
+    return None
+
+
+# --------------------------------------------------------------------------- LINE I/O
+TOKEN_URL = "https://api.line.me/oauth2/v3/token"
+
+
+async def issue_stateless_token(channel_id: str, channel_secret: str) -> tuple[str, int]:
+    """Get a short-lived (15 min) "stateless" access token from Channel ID + Channel secret.
+    No 'Issue' button needed. Returns (token, seconds_valid)."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(TOKEN_URL, data={
+            "grant_type": "client_credentials",
+            "client_id": channel_id,
+            "client_secret": channel_secret,
+        })
+    if r.status_code != 200:
+        raise RuntimeError(f"LINE token request failed {r.status_code}: {r.text}")
+    d = r.json()
+    return d["access_token"], int(d.get("expires_in", 900))
+
+
+class Line:
+    """Thin wrapper around the LINE SDK.
+
+    Auth, in order of preference:
+      1. LINE_CHANNEL_ACCESS_TOKEN (long-lived token), or
+      2. LINE_CHANNEL_ID + LINE_CHANNEL_SECRET → the bot issues a 15-minute token itself
+         and renews it automatically before it expires.
+    With neither, it only logs messages (dry-run mode).
+    """
+
+    def __init__(self) -> None:
+        self._client: AsyncApiClient | None = None
+        self._config: Configuration | None = None
+        self._expires_at = 0.0  # 0 = long-lived token, never refresh
+        self._lock = asyncio.Lock()
+        self.api: AsyncMessagingApi | None = None
+        self.sent: list[tuple[str, str, list]] = []  # kept for tests / debugging
+
+    async def start(self) -> None:
+        if settings.channel_access_token:
+            self._config = Configuration(access_token=settings.channel_access_token, ssl_ca_cert=certifi.where())
+            log.info("LINE auth: long-lived channel access token")
+        elif settings.channel_id and settings.channel_secret:
+            self._config = Configuration(access_token="", ssl_ca_cert=certifi.where())
+            self._expires_at = 1.0  # force a fetch on first use
+            log.info("LINE auth: Channel ID + secret (auto-renewing 15-minute token)")
+        else:
+            log.warning("No LINE token and no LINE_CHANNEL_ID → DRY-RUN mode (messages are only logged)")
+            return
+        self._client = AsyncApiClient(self._config)
+        self.api = AsyncMessagingApi(self._client)
+
+    async def _ensure_token(self) -> None:
+        if not self._expires_at or time.time() < self._expires_at:
+            return
+        async with self._lock:
+            if time.time() < self._expires_at:
+                return  # another request already renewed it
+            token, ttl = await issue_stateless_token(settings.channel_id, settings.channel_secret)
+            self._config.access_token = token
+            self._expires_at = time.time() + ttl - 60  # renew a minute early
+            log.info("Issued new LINE stateless token (valid %d min)", ttl // 60)
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.close()
+
+    async def reply(self, token: str, messages: list) -> None:
+        """Replies are FREE and don't count toward your monthly quota."""
+        self.sent.append(("reply", token, messages))
+        if self.api:
+            await self._ensure_token()
+            await self.api.reply_message(ReplyMessageRequest(reply_token=token, messages=messages))
+        else:
+            log.info("DRY reply → %s", [m.alt_text if hasattr(m, "alt_text") else m.text for m in messages])
+
+    async def push(self, to: str, messages: list) -> None:
+        """Push messages DO count: 1 message × number of people in the group."""
+        self.sent.append(("push", to, messages))
+        if self.api:
+            await self._ensure_token()
+            await self.api.push_message(PushMessageRequest(to=to, messages=messages))
+        else:
+            log.info("DRY push %s → %s", to, [getattr(m, "alt_text", None) for m in messages])
+
+
+line = Line()
+
+
+def flex(alt: str, bubble: dict) -> FlexMessage:
+    return FlexMessage(alt_text=alt[:400], contents=FlexContainer.from_dict(bubble))
+
+
+def puzzle_message(p: lichess.Puzzle, title: str) -> FlexMessage:
+    return flex(f"{title}: {p.side_to_move} to move", cards.puzzle_bubble(p, title))
+
+
+def solution_message(p: lichess.Puzzle) -> FlexMessage:
+    return flex(f"Solution: {p.solution_san()}", cards.solution_bubble(p))
+
+
+def help_text() -> str:
+    p = settings.command_prefixes[0]
+    cats = " / ".join(settings.categories)
+    return ("♟ Chess Puzzle Bot\n"
+            f"I post a puzzle here every day at {settings.daily_push_time}.\n\n"
+            f"Commands:\n"
+            f"{p} → menu\n"
+            f"{p} daily → today's puzzle\n"
+            f"{p} <type> → {cats}\n"
+            f"(e.g. {p} endgame)")
+
+
+def menu_message() -> FlexMessage:
+    return flex("Chess Puzzle Bot – pick a puzzle type", cards.menu_bubble())
+
+
+# --------------------------------------------------------------------------- actions
+async def make_category_puzzle(theme: str) -> FlexMessage:
+    p = await lichess.next_by_theme(theme)
+    label = settings.categories.get(theme, theme.title())
+    return puzzle_message(p, f"♞ {label} Puzzle")
+
+
+async def make_daily_puzzle() -> FlexMessage:
+    p = await lichess.daily()
+    return puzzle_message(p, "📅 Daily Puzzle")
+
+
+async def push_daily_to_all() -> dict:
+    """Called by the scheduler (and POST /admin/push-daily)."""
+    groups = store.all_groups()
+    if not groups:
+        log.warning("No groups registered yet – invite the bot to a group first.")
+        return {"sent": 0, "groups": []}
+    msg = await make_daily_puzzle()
+    ok = []
+    for gid in groups:
+        try:
+            await line.push(gid, [msg])
+            ok.append(gid)
+        except Exception:  # one bad group shouldn't stop the others
+            log.exception("Push to %s failed", gid)
+    return {"sent": len(ok), "groups": ok}
+
+
+# --------------------------------------------------------------------------- events
+def _group_id(event) -> str | None:
+    src = getattr(event, "source", None)
+    return src.group_id if isinstance(src, GroupSource) else None
+
+
+async def _safe_reply(token: str, build) -> None:
+    try:
+        msgs = await build()
+    except Exception:
+        log.exception("Failed to build reply")
+        msgs = [TextMessage(text="😵 Lichess didn't answer. Please try again in a moment.")]
+    await line.reply(token, msgs)
+
+
+async def handle_event(event) -> None:
+    gid = _group_id(event)
+    if gid and not isinstance(event, LeaveEvent):
+        store.add_group(gid)  # also catches groups the bot joined before the server was up
+
+    if isinstance(event, JoinEvent):
+        log.info("Joined group %s", gid)
+        await line.reply(event.reply_token, [
+            TextMessage(text=help_text()),
+            menu_message(),
+        ])
+
+    elif isinstance(event, LeaveEvent):
+        if gid:
+            store.remove_group(gid)
+            log.info("Removed from group %s", gid)
+
+    elif isinstance(event, FollowEvent):
+        await line.reply(event.reply_token, [menu_message()])
+
+    elif isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
+        cmd = parse_command(event.message.text)
+        if cmd is None:
+            return  # normal chat (no "/chess" prefix) → stay quiet
+        if cmd in settings.categories:
+            await _safe_reply(event.reply_token, lambda: _one(make_category_puzzle(cmd)))
+        elif cmd in DAILY_WORDS:
+            await _safe_reply(event.reply_token, lambda: _one(make_daily_puzzle()))
+        elif cmd in HELP_WORDS:
+            await line.reply(event.reply_token, [menu_message()])
+        else:  # "/chess something-unknown" → show how to use it
+            await line.reply(event.reply_token, [TextMessage(text=help_text()), menu_message()])
+
+    elif isinstance(event, PostbackEvent):
+        data = {k: v[0] for k, v in parse_qs(event.postback.data).items()}
+        action = data.get("a")
+        if action == "sol" and data.get("id"):
+            await _safe_reply(event.reply_token,
+                              lambda: _one_sync(lichess.by_id(data["id"]), solution_message))
+        elif action == "new" and data.get("t"):
+            await _safe_reply(event.reply_token, lambda: _one(make_category_puzzle(data["t"])))
+        elif action == "daily":
+            await _safe_reply(event.reply_token, lambda: _one(make_daily_puzzle()))
+
+
+async def _one(coro) -> list:
+    return [await coro]
+
+
+async def _one_sync(coro, fn) -> list:
+    return [fn(await coro)]

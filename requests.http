@@ -1,0 +1,13 @@
+### Health check
+GET http://localhost:8000/
+
+### See which groups the bot knows about
+GET http://localhost:8000/admin/groups
+X-Admin-Key: change-me-to-something-random
+
+### Push today's puzzle to every group NOW (uses your monthly message quota!)
+POST http://localhost:8000/admin/push-daily
+X-Admin-Key: change-me-to-something-random
+
+### View a board image (replace with a real puzzle id)
+GET http://localhost:8000/board/K69di.png

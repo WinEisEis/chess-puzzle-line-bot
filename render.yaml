@@ -1,0 +1,29 @@
+# Render Blueprint: Render reads this automatically when you choose "New → Blueprint".
+services:
+  - type: web
+    name: chess-puzzle-line-bot
+    runtime: python
+    plan: free
+    region: singapore          # closest to Thailand
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.1"
+      - key: LINE_CHANNEL_ID
+        sync: false            # Render asks you for the value
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: BASE_URL
+        sync: false            # https://<your-service>.onrender.com
+      - key: GROUP_IDS
+        sync: false            # your LINE group ID(s), comma separated
+      - key: ADMIN_KEY
+        generateValue: true    # random secret for /admin/* (see it under Environment)
+      - key: DAILY_PUSH_ENABLED
+        value: "false"         # the 08:00 post is triggered by cron-job.org instead
+      - key: PUZZLE_DIFFICULTY
+        value: harder
+      - key: TIMEZONE
+        value: Asia/Bangkok
