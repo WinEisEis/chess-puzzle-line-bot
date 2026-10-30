@@ -30,7 +30,9 @@ class Engine:
     """Small synchronous wrapper. Run it in a thread (asyncio.to_thread) from async code."""
 
     def __init__(self, path: str, hash_mb: int = 16) -> None:
-        self._e = chess.engine.SimpleEngine.popen_uci(path)
+        # Run at the lowest priority so the bot keeps answering LINE quickly meanwhile.
+        cmd = ["nice", "-n", "19", path] if shutil.which("nice") else path
+        self._e = chess.engine.SimpleEngine.popen_uci(cmd)
         self._e.configure({"Threads": 1, "Hash": hash_mb})
 
     def close(self) -> None:
@@ -57,3 +59,10 @@ class Engine:
             score = info["score"].pov(board.turn).score(mate_score=10000)
             out.append((info["pv"][0], score))
         return out
+
+    def top_moves_depth(self, board: chess.Board, depth: int) -> list[tuple[chess.Move, int]]:
+        """Very shallow search (e.g. depth 2) — stands in for a quick human look."""
+        info = self._e.analyse(board, chess.engine.Limit(depth=depth))
+        if not info.get("pv"):
+            return []
+        return [(info["pv"][0], info["score"].pov(board.turn).score(mate_score=10000))]

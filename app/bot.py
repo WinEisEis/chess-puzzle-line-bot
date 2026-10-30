@@ -183,8 +183,8 @@ async def make_daily_puzzle() -> tuple[FlexMessage, str]:
 
 
 TOP_TITLE = "🏆 Top Game Puzzle"
-TOP_WAIT = ("⏳ กำลังให้ Stockfish วิเคราะห์เกมระดับท็อปล่าสุดอยู่ "
-            "ลองใหม่ในอีกไม่กี่นาทีนะ")
+TOP_WAIT = ("⏳ Stockfish กำลังคุ้ยเกม classical ของ GM ระดับท็อปหาโจทย์ยาก ๆ อยู่ "
+            "(รอบแรกอาจใช้เวลาเกือบชั่วโมง) ลองใหม่อีกทีทีหลังนะ")
 
 
 async def make_top_puzzle() -> tuple[FlexMessage, str]:

@@ -119,18 +119,23 @@ curl -X POST http://localhost:8000/admin/push-daily -H "X-Admin-Key: <your ADMIN
 
 ## Top-game puzzles
 
-Every day at `TOP_REFRESH_TIME` (07:00) the bot:
+Every night at `TOP_REFRESH_TIME` (03:00) the bot:
 
-1. downloads the latest finished rounds of top-tier tournaments from the free
-   [Lichess Broadcasts API](https://lichess.org/api#tag/Broadcasts) (no key needed),
-2. lets **Stockfish** look through the decisive games for the moment where the winner had one
-   move that wins and every other move doesn't (the same idea Lichess uses to make puzzles),
-3. turns it into a puzzle card: "Gukesh – Carlsen · Norway Chess · Round 5, White to move".
+1. walks the **Lichess Masters database** (the "Masters" tab of the Opening Explorer: OTB games
+   of titled players) and collects ~60 **classical** games where a player was rated **2700+**
+   (blitz/rapid/online events are skipped; games already scanned are never scanned again),
+2. lets **Stockfish** mark the interesting moments: the opponent just erred, a player found a move
+   a quick search didn't see, or a player *missed* a win,
+3. keeps only real puzzles: **one** winning move (or a short forced mate) — no free captures or
+   recaptures — and checks difficulty with a **depth-2 "quick look"**: if that finds the move,
+   it's too easy (unless it's a sacrifice),
+4. scores the rest (+ hard to see, + sacrifice, + quiet move, + 2–3 move solution, + the GM missed
+   it, + mate) and keeps the best. If nothing is hard enough, yesterday's puzzle stays.
 
-The 08:00 post then contains **both** the Lichess daily puzzle and the top-game puzzle in one
-push, which LINE counts as **one** message per person. The same game is never used twice.
-On the free Render server the analysis takes a few minutes; `POST /admin/refresh-top` starts it
-manually. Locally you need `brew install stockfish`; Render installs it via `scripts/get_stockfish.sh`.
+The 08:00 post contains the Lichess daily puzzle **and** the top-game puzzle in one push
+(LINE counts it as one message per person). On the free Render server a run takes up to about an
+hour, which is why it runs at night. `POST /admin/refresh-top` starts one manually.
+Settings: `TOP_MIN_ELO`, `TOP_SINCE_YEAR`, `TOP_GAMES_PER_RUN`, `TOP_SOURCE=broadcast` (old mode).
 
 ## Customize
 

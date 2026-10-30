@@ -7,6 +7,7 @@ import os
 import sys
 from pathlib import Path
 
+import chess
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -324,3 +325,82 @@ def test_stockfish_finds_legals_mate(monkeypatch):
         assert "found it" in p.note
     finally:
         object.__setattr__(settings, "top_min_ply", 14)
+
+
+def test_master_game_filters():
+    from app import topgames
+    assert topgames._is_classical_event("Norway Chess 2023")
+    assert topgames._is_classical_event("Tata Steel Masters")
+    for fast in ("World Blitz", "Chessable Masters Div 1", "Titled Tuesday", "Carlsen Tour Final",
+                 "Champions Chess Tour Airthings Masters", "Casual Rapid game"):
+        assert not topgames._is_classical_event(fast), fast
+    assert not topgames._is_classical_event("Some Open", "180+2")
+    assert topgames._is_classical_event("Some Open", "5400+30")
+    pages = [{"topGames": [
+        {"id": "aaa", "white": {"name": "Carlsen, M.", "rating": 2863},
+         "black": {"name": "Caruana, F.", "rating": 2835}, "year": 2019, "winner": None},
+        {"id": "bbb", "white": {"name": "Ding, L.", "rating": 2805},
+         "black": {"name": "Nepo, I.", "rating": 2795}, "year": 2023, "winner": "white"},
+        {"id": "ccc", "white": {"name": "Club, A.", "rating": 2350},
+         "black": {"name": "Club, B.", "rating": 2400}, "year": 2020, "winner": "black"},
+        {"id": "ddd", "white": {"name": "Kasparov, G.", "rating": 2851},
+         "black": {"name": "Topalov, V.", "rating": 2700}, "year": 1999, "winner": "white"},
+    ]}, {"topGames": [{"id": "bbb", "white": {"rating": 2805}, "black": {"rating": 2795},
+                       "year": 2023, "winner": "white"}]}]
+    picked = topgames.pick_master_games(pages, skip={"m:aaa"})
+    assert [g["id"] for g in picked] == ["bbb"]          # 2700+, since 2005, not skipped, no dupes
+
+
+def test_only_move_rule():
+    from app import topgames
+    m = chess.Move.from_uci("e2e4")
+    assert topgames._winning_only_move([(m, 9997), (m, 600)])        # short mate, others don't mate
+    assert not topgames._winning_only_move([(m, 9997), (m, 9990)])   # several mates
+    assert topgames._winning_only_move([(m, 450), (m, 0)])           # clearly the only win
+    assert not topgames._winning_only_move([(m, 1100), (m, 600)])    # both win anyway
+
+
+def test_fetch_master_games_flow(monkeypatch):
+    """Simulated Lichess explorer: walk the tree, keep 2700+ classical games, download PGNs."""
+    import asyncio as _a
+    import httpx
+    from app import topgames
+
+    pgns = {
+        "g1": '[Event "Norway Chess 2023"]\n[White "Carlsen, M."]\n[Black "Caruana, F."]\n'
+              '[Result "1-0"]\n[Date "2023.06.01"]\n\n1. e4 e5 2. Nf3 Nc6 1-0\n',
+        "g2": '[Event "World Blitz 2023"]\n[White "Carlsen, M."]\n[Black "Nakamura, H."]\n'
+              '[Result "0-1"]\n\n1. d4 d5 0-1\n',
+    }
+    calls = []
+
+    def handler(req: httpx.Request):
+        calls.append(req.url.path)
+        if req.url.path == "/masters":
+            return httpx.Response(200, json={
+                "moves": [{"uci": "e2e4", "white": 10, "draws": 5, "black": 3}],
+                "topGames": [
+                    {"id": "g1", "white": {"name": "Carlsen, M.", "rating": 2853},
+                     "black": {"name": "Caruana, F.", "rating": 2766}, "year": 2023, "winner": "white"},
+                    {"id": "g2", "white": {"name": "Carlsen, M.", "rating": 2853},
+                     "black": {"name": "Nakamura, H.", "rating": 2780}, "year": 2023, "winner": "black"}]})
+        gid = req.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, text=pgns[gid])
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(topgames.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+    async def no_sleep(_):
+        return None
+    monkeypatch.setattr(topgames.asyncio, "sleep", no_sleep)
+    object.__setattr__(settings, "top_walks", 1)
+    try:
+        games = _a.run(topgames.fetch_master_games())
+    finally:
+        object.__setattr__(settings, "top_walks", 8)
+    assert [m["id"] for m, _ in games] == ["g1"]              # blitz game dropped
+    meta, g = games[0]
+    assert meta["url"] == "https://lichess.org/g1" and meta["key"] == "m:g1"
+    assert g.headers["White"] == "Carlsen, M."
+    assert any(p.startswith("/master/pgn/") for p in calls)

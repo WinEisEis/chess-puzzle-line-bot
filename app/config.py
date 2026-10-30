@@ -60,14 +60,24 @@ class Settings:
 
     # Top-game puzzles (positions from the latest elite games, found by Stockfish)
     top_enabled: bool = field(default_factory=lambda: _bool("TOP_ENABLED", True))
-    top_refresh_time: str = field(default_factory=lambda: os.getenv("TOP_REFRESH_TIME", "07:00"))
+    top_refresh_time: str = field(default_factory=lambda: os.getenv("TOP_REFRESH_TIME", "03:00"))
     top_min_tier: int = field(default_factory=lambda: int(os.getenv("TOP_MIN_TIER", "4")))
     top_max_rounds: int = field(default_factory=lambda: int(os.getenv("TOP_MAX_ROUNDS", "4")))
     top_lookback_days: int = field(default_factory=lambda: int(os.getenv("TOP_LOOKBACK_DAYS", "10")))
     top_min_ply: int = field(default_factory=lambda: int(os.getenv("TOP_MIN_PLY", "14")))
-    top_max_positions: int = field(default_factory=lambda: int(os.getenv("TOP_MAX_POSITIONS", "500")))
-    top_scan_nodes: int = field(default_factory=lambda: int(os.getenv("TOP_SCAN_NODES", "40000")))
-    top_verify_nodes: int = field(default_factory=lambda: int(os.getenv("TOP_VERIFY_NODES", "400000")))
+    top_max_positions: int = field(default_factory=lambda: int(os.getenv("TOP_MAX_POSITIONS", "4000")))
+    top_scan_nodes: int = field(default_factory=lambda: int(os.getenv("TOP_SCAN_NODES", "25000")))
+    top_verify_nodes: int = field(default_factory=lambda: int(os.getenv("TOP_VERIFY_NODES", "600000")))
+    # "masters" = classical OTB games from the Lichess Masters DB (default)
+    # "broadcast" = latest rounds of live-broadcast tournaments
+    top_source: str = field(default_factory=lambda: os.getenv("TOP_SOURCE", "masters").lower())
+    top_min_elo: int = field(default_factory=lambda: int(os.getenv("TOP_MIN_ELO", "2700")))
+    top_since_year: int = field(default_factory=lambda: int(os.getenv("TOP_SINCE_YEAR", "2005")))
+    top_walks: int = field(default_factory=lambda: int(os.getenv("TOP_WALKS", "8")))
+    top_games_per_run: int = field(default_factory=lambda: int(os.getenv("TOP_GAMES_PER_RUN", "60")))
+    top_weak_depth: int = field(default_factory=lambda: int(os.getenv("TOP_WEAK_DEPTH", "2")))
+    top_max_deep: int = field(default_factory=lambda: int(os.getenv("TOP_MAX_DEEP", "40")))
+    top_min_score: int = field(default_factory=lambda: int(os.getenv("TOP_MIN_SCORE", "600")))
 
     # Daily push
     daily_push_enabled: bool = field(default_factory=lambda: _bool("DAILY_PUSH_ENABLED", True))
