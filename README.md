@@ -97,6 +97,7 @@ Try these in the group:
 | tap **💡 Show solution** | the answer, move by move, but only 10 minutes after the puzzle was posted (`SOLUTION_LOCK_MINUTES`, `LOCK_MESSAGE` in `.env`) |
 | `/chess` | shows the menu card |
 | `/chess daily` | today's Lichess daily puzzle |
+| `/chess top` or tap **🏆 Top game** | a position from the latest elite games (see below) |
 | `/chess opening` · `/chess middlegame` · `/chess endgame` | same as the buttons |
 | `/หมากรุก ท้ายเกม` (also `เปิดเกม`, `กลางเกม`) | Thai versions |
 
@@ -115,6 +116,21 @@ curl -X POST http://localhost:8000/admin/push-daily -H "X-Admin-Key: <your ADMIN
 ```
 
 ---
+
+## Top-game puzzles
+
+Every day at `TOP_REFRESH_TIME` (07:00) the bot:
+
+1. downloads the latest finished rounds of top-tier tournaments from the free
+   [Lichess Broadcasts API](https://lichess.org/api#tag/Broadcasts) (no key needed),
+2. lets **Stockfish** look through the decisive games for the moment where the winner had one
+   move that wins and every other move doesn't (the same idea Lichess uses to make puzzles),
+3. turns it into a puzzle card: "Gukesh – Carlsen · Norway Chess · Round 5, White to move".
+
+The 08:00 post then contains **both** the Lichess daily puzzle and the top-game puzzle in one
+push, which LINE counts as **one** message per person. The same game is never used twice.
+On the free Render server the analysis takes a few minutes; `POST /admin/refresh-top` starts it
+manually. Locally you need `brew install stockfish`; Render installs it via `scripts/get_stockfish.sh`.
 
 ## Customize
 

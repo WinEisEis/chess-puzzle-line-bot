@@ -55,7 +55,8 @@
     <button id="hintBtn">💡 Hint</button>
     <button id="resetBtn">↺ Restart</button>
   </div>
-  <div class="foot">Tap a piece, then tap where it should go. · <a id="lichess" href="#">Open on Lichess</a></div>
+  <div class="foot" id="source"></div>
+  <div class="foot">Tap a piece, then tap where it should go.<span id="linkWrap" hidden> · <a id="lichess" href="#">See it on Lichess</a></span></div>
 </div>
 
 <script src="/static/chess.js"></script>
@@ -72,7 +73,8 @@ async function load() {
   const r = await fetch(`/api/puzzle/${PUZZLE_ID}`);
   if (!r.ok) { setStatus("Puzzle not found 😢", "bad"); return; }
   P = await r.json();
-  document.getElementById("meta").textContent = `Rating ${P.rating}`;
+  document.getElementById("meta").textContent = P.source ? "🏆 Real game" : `Rating ${P.rating}`;
+  if (P.source) document.getElementById("source").textContent = P.source;
   document.getElementById("lichess").href = P.lichess_url;
   reset();
 }
@@ -189,6 +191,7 @@ async function tryMove(from, to) {
 
 function win() {
   done = true; busy = false; render();
+  document.getElementById("linkWrap").hidden = false;   // link shown only after solving (no spoilers)
   setStatus(tries === 0 ? "🎉 Solved on the first try!" : `🎉 Solved! (${tries} wrong ${tries === 1 ? "try" : "tries"})`, "win");
 }
 

@@ -32,6 +32,7 @@ def category_buttons() -> dict:
         _postback(label[:20], {"a": "new", "t": theme}, display=f"{label} puzzle please!")
         for theme, label in settings.categories.items()
     ]
+    buttons.append(_postback("🏆 Top game", {"a": "top"}, display="🏆 Top game puzzle please!"))
     return {"type": "box", "layout": "vertical", "spacing": "sm", "contents": buttons}
 
 
@@ -47,7 +48,8 @@ def puzzle_bubble(p: Puzzle, title: str) -> dict:
             "contents": [
                 {"type": "text", "text": title, "color": "#FFFFFF", "weight": "bold", "size": "lg"},
                 {"type": "text", "color": "#DDDDDD", "size": "sm",
-                 "text": f"{p.side_to_move} to move · Rating {p.rating}"},
+                 "text": (f"{p.side_to_move} to move · from a real game" if p.is_top_game
+                          else f"{p.side_to_move} to move · Rating {p.rating}")},
             ],
         },
         "hero": {
@@ -60,8 +62,9 @@ def puzzle_bubble(p: Puzzle, title: str) -> dict:
             "contents": [
                 {"type": "text", "text": f"Find the best move for {p.side_to_move}!",
                  "weight": "bold", "wrap": True},
-                {"type": "text", "text": f"Themes: {nice_themes}" if nice_themes else " ",
-                 "size": "xs", "color": MUTED, "wrap": True},
+                {"type": "text", "size": "xs", "color": MUTED, "wrap": True,
+                 "text": (f"🏆 {p.source}" if p.is_top_game
+                          else f"Themes: {nice_themes}" if nice_themes else " ")},
             ],
         },
         "footer": {
@@ -98,6 +101,8 @@ def solution_bubble(p: Puzzle) -> dict:
                 {"type": "text", "text": p.solution_san(), "size": "sm", "color": GREEN, "wrap": True},
                 {"type": "separator", "margin": "md"},
                 *lines,
+                *([{"type": "text", "text": p.note, "size": "sm", "wrap": True, "margin": "md"}]
+                  if p.note else []),
                 {"type": "text", "text": "✅ = your move   ↪ = opponent's reply",
                  "size": "xxs", "color": MUTED, "margin": "md", "wrap": True},
             ],
@@ -106,7 +111,9 @@ def solution_bubble(p: Puzzle) -> dict:
             "type": "box", "layout": "vertical", "spacing": "sm",
             "contents": [
                 {"type": "button", "style": "link", "height": "sm",
-                 "action": {"type": "uri", "label": "Replay on Lichess ↗", "uri": p.lichess_url}},
+                 "action": {"type": "uri", "label": ("See the game ↗" if p.is_top_game
+                                                     else "Replay on Lichess ↗"),
+                            "uri": p.lichess_url}},
                 category_buttons(),
             ],
         },

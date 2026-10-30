@@ -22,6 +22,10 @@ class Puzzle:
     last_move: str | None    # opponent's move that led to it (UCI), for highlighting
     solution: list[str]      # UCI moves, solver first, then alternating replies
     game_url: str
+    # Only for puzzles taken from recent top games (see topgames.py):
+    source: str = ""         # e.g. "Gukesh D – Carlsen, Magnus · Norway Chess 2026 · Round 5"
+    note: str = ""           # e.g. "In the game, Gukesh found it!"
+    url: str = ""            # link to the real game (shown only after solving)
 
     @property
     def turn(self) -> chess.Color:
@@ -33,7 +37,11 @@ class Puzzle:
 
     @property
     def lichess_url(self) -> str:
-        return f"https://lichess.org/training/{self.id}"
+        return self.url or f"https://lichess.org/training/{self.id}"
+
+    @property
+    def is_top_game(self) -> bool:
+        return bool(self.source)
 
     def solution_san(self) -> str:
         """e.g. '1. Qxf7#'  or  '23... Rxe1+ 24. Kh2 Qh4#'"""
@@ -144,6 +152,17 @@ def parse_puzzle(data: dict) -> Puzzle:
 
 # Small in-memory cache so the image endpoint and the "solution" button don't refetch.
 _cache: dict[str, Puzzle] = {}
+_pinned: dict[str, Puzzle] = {}   # top-game puzzles: never evicted, never fetched from Lichess
+
+
+def is_top_id(puzzle_id: str) -> bool:
+    """Our own ids look like 'top3f9a1c2b7e' — Lichess puzzle ids are always 5 characters."""
+    return puzzle_id.startswith("top") and len(puzzle_id) > 5
+
+
+def pin(p: Puzzle) -> Puzzle:
+    _pinned[p.id] = p
+    return p
 
 
 def remember(p: Puzzle) -> Puzzle:
@@ -172,6 +191,10 @@ async def daily() -> Puzzle:
 
 
 async def by_id(puzzle_id: str) -> Puzzle:
+    if puzzle_id in _pinned:
+        return _pinned[puzzle_id]
+    if is_top_id(puzzle_id):
+        raise KeyError(f"Top-game puzzle {puzzle_id} is no longer available")
     if puzzle_id in _cache:
         return _cache[puzzle_id]
     return remember(parse_puzzle(await _get(f"/puzzle/{puzzle_id}")))

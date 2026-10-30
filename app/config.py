@@ -58,6 +58,17 @@ class Settings:
         "LOCK_MESSAGE",
         "🤔 คิดก่อนดิ! ให้เวลา {minutes} นาทีถึงจะเฉลย\n⏳ เหลืออีก {left} นาที"))
 
+    # Top-game puzzles (positions from the latest elite games, found by Stockfish)
+    top_enabled: bool = field(default_factory=lambda: _bool("TOP_ENABLED", True))
+    top_refresh_time: str = field(default_factory=lambda: os.getenv("TOP_REFRESH_TIME", "07:00"))
+    top_min_tier: int = field(default_factory=lambda: int(os.getenv("TOP_MIN_TIER", "4")))
+    top_max_rounds: int = field(default_factory=lambda: int(os.getenv("TOP_MAX_ROUNDS", "4")))
+    top_lookback_days: int = field(default_factory=lambda: int(os.getenv("TOP_LOOKBACK_DAYS", "10")))
+    top_min_ply: int = field(default_factory=lambda: int(os.getenv("TOP_MIN_PLY", "14")))
+    top_max_positions: int = field(default_factory=lambda: int(os.getenv("TOP_MAX_POSITIONS", "500")))
+    top_scan_nodes: int = field(default_factory=lambda: int(os.getenv("TOP_SCAN_NODES", "40000")))
+    top_verify_nodes: int = field(default_factory=lambda: int(os.getenv("TOP_VERIFY_NODES", "400000")))
+
     # Daily push
     daily_push_enabled: bool = field(default_factory=lambda: _bool("DAILY_PUSH_ENABLED", True))
     daily_push_time: str = field(default_factory=lambda: os.getenv("DAILY_PUSH_TIME", "08:00"))  # HH:MM

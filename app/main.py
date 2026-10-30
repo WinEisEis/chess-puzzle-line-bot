@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from linebot.v3 import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
 
-from . import lichess, store
+from . import lichess, store, topgames
 from .board import render_png
 from .bot import handle_event, line, push_daily_to_all
 from .config import settings
@@ -37,8 +37,18 @@ async def lifespan(_: FastAPI):
         hh, mm = settings.daily_push_time.split(":")
         scheduler.add_job(push_daily_to_all, CronTrigger(hour=int(hh), minute=int(mm)),
                           id="daily", replace_existing=True, misfire_grace_time=3600)
-        scheduler.start()
         log.info("Daily puzzle scheduled at %s (%s)", settings.daily_push_time, settings.timezone)
+    if settings.top_enabled:
+        topgames.load_saved()
+        hh, mm = settings.top_refresh_time.split(":")
+        scheduler.add_job(topgames.refresh, CronTrigger(hour=int(hh), minute=int(mm)),
+                          id="top", replace_existing=True, misfire_grace_time=3600)
+        log.info("Top-game puzzle refresh scheduled at %s (%s)", settings.top_refresh_time,
+                 settings.timezone)
+        if not topgames.is_fresh():
+            topgames.refresh_in_background()   # e.g. right after a Render restart
+    if scheduler.get_jobs():
+        scheduler.start()
     log.info("Board images will be served from %s/board/<id>.png", settings.base_url)
     yield
     if scheduler.running:
@@ -106,7 +116,7 @@ async def api_puzzle(puzzle_id: str):
     p = await _puzzle_or_404(puzzle_id)
     # Note: no solution here — moves are checked on the server.
     return {"id": p.id, "fen": p.fen, "last_move": p.last_move, "rating": p.rating,
-            "themes": p.themes, "lichess_url": p.lichess_url}
+            "themes": p.themes, "lichess_url": p.lichess_url, "source": p.source}
 
 
 class CheckBody(BaseModel):
@@ -131,6 +141,17 @@ async def admin_push_daily(x_admin_key: str = Header(default="")):
     if not settings.admin_key or x_admin_key != settings.admin_key:
         raise HTTPException(status_code=403, detail="Bad or missing X-Admin-Key")
     return await push_daily_to_all()
+
+
+@app.post("/admin/refresh-top")
+async def admin_refresh_top(x_admin_key: str = Header(default="")):
+    """Start looking for a new top-game puzzle now (runs in the background, a few minutes)."""
+    if not settings.admin_key or x_admin_key != settings.admin_key:
+        raise HTTPException(status_code=403, detail="Bad or missing X-Admin-Key")
+    started = not topgames.is_running()
+    topgames.refresh_in_background()
+    cur = topgames.latest()
+    return {"started": started, "current": cur.source if cur else None}
 
 
 @app.get("/admin/groups")

@@ -234,3 +234,93 @@ def test_play_api_hides_solution_and_checks_moves():
         assert c.get("/api/puzzle/BLK01/hint?ply=0").json() == {"square": "d8"}
         assert c.get("/static/pieces/wK.png").status_code == 200
         assert c.get("/static/chess.js").status_code == 200
+
+
+# --------------------------------------------------------------------------- top-game puzzles
+LEGAL_PGN = """[Event "Test Open"]
+[Round "5"]
+[White "Legal, Sire de"]
+[Black "Saint Brie"]
+[Result "1-0"]
+[ChapterURL "https://lichess.org/broadcast/test/round-5/abcd1234/efgh5678"]
+
+1. e4 e5 2. Nf3 d6 3. Bc4 Bg4 4. Nc3 g6 5. Nxe5 Bxd1 6. Bxf7+ Ke7 7. Nd5# 1-0
+"""
+
+
+def _top_puzzle():
+    return lichess.Puzzle(
+        id="top0123456789", rating=0, themes=[],
+        fen="rn1qkbnr/ppp2p1p/3p2p1/4N3/2B1P3/2N5/PPPP1PPP/R1BbK2R w KQkq - 0 6",
+        last_move="g4d1", solution=["c4f7", "e8e7", "c3d5"], game_url="https://x",
+        source="Legal – Saint Brie · Test Open 2026 · Round 5",
+        note="In the game, Legal found it! ✅", url="https://x")
+
+
+def test_pick_rounds_prefers_latest_finished_top_tier():
+    import json as _j
+    from app import topgames
+    now = 1_800_000_000_000
+    day = 86_400_000
+    lines = [
+        {"tour": {"name": "Elite Cup", "tier": 5},
+         "rounds": [{"id": "r1", "name": "Round 1", "startsAt": now - 3 * day, "finished": True},
+                    {"id": "r2", "name": "Round 2", "startsAt": now - 1 * day, "finished": True},
+                    {"id": "r3", "name": "Round 3", "startsAt": now + 1 * day}]},
+        {"tour": {"name": "Club Open", "tier": 3},
+         "rounds": [{"id": "c1", "name": "R1", "startsAt": now - day, "finished": True}]},
+        {"tour": {"name": "Old Masters", "tier": 5},
+         "rounds": [{"id": "o1", "name": "R9", "startsAt": now - 40 * day, "finished": True}]},
+    ]
+    picked = topgames.pick_rounds("\n".join(_j.dumps(x) for x in lines), now_ms=now)
+    assert [p["id"] for p in picked] == ["r2"]
+    assert picked[0]["tour"] == "Elite Cup"
+
+
+def test_top_command_and_waiting_message(monkeypatch):
+    from app import topgames
+    monkeypatch.setattr(topgames, "refresh_in_background", lambda: None)
+    monkeypatch.setattr(topgames, "_latest", None)
+    with TestClient(app) as c:
+        _say(c, "/chess top")
+        assert "Stockfish" in line.sent[-1][2][0].text          # not ready yet
+        monkeypatch.setattr(topgames, "_latest", lichess.pin(_top_puzzle()))
+        signed_post(c, [ev("postback", postback={"data": "a=top"})])
+        d = line.sent[-1][2][0].to_dict()
+        assert "Top Game" in d["altText"]
+        assert "Legal – Saint Brie" in json.dumps(d, ensure_ascii=False)
+        assert c.get("/board/top0123456789.png").status_code == 200
+        assert c.get("/api/puzzle/top0123456789").json()["source"].startswith("Legal")
+        r = c.post("/api/puzzle/top0123456789/check", json={"line": ["c4f7"]}).json()
+        assert r["reply"] == "e8e7"
+
+
+def test_daily_push_bundles_top_puzzle_in_one_request(monkeypatch):
+    from app import topgames
+    monkeypatch.setattr(topgames, "refresh_in_background", lambda: None)
+    monkeypatch.setattr(topgames, "_latest", lichess.pin(_top_puzzle()))
+    monkeypatch.setattr(topgames, "_pushed", "")
+    store.add_group("Cg1")
+    with TestClient(app) as c:
+        c.post("/admin/push-daily", headers={"X-Admin-Key": "k"})
+        assert len(line.sent) == 1 and len(line.sent[0][2]) == 2   # 1 push, 2 cards
+        line.sent.clear()
+        c.post("/admin/push-daily", headers={"X-Admin-Key": "k"})
+        assert len(line.sent[0][2]) == 1                           # same top puzzle not repeated
+
+
+@pytest.mark.skipif(not __import__("app.engine", fromlist=["x"]).find_stockfish(),
+                    reason="Stockfish not installed")
+def test_stockfish_finds_legals_mate(monkeypatch):
+    from app import topgames
+    from app.engine import Engine, find_stockfish
+    object.__setattr__(settings, "top_min_ply", 4)   # the sample game is very short
+    try:
+        games = [({"id": "abcd1234", "tour": "Test Open 2026", "round": "Round 5"}, g)
+                 for g in topgames.parse_games(LEGAL_PGN)]
+        with Engine(find_stockfish()) as e:
+            p, _ = topgames.find_best_puzzle(games, e)
+        assert p.solution == ["c4f7", "e8e7", "c3d5"]
+        assert "found it" in p.note
+    finally:
+        object.__setattr__(settings, "top_min_ply", 14)

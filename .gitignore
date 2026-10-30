@@ -6,3 +6,5 @@ __pycache__/
 data/groups.json
 preview_*.png
 .vscode/
+bin/
+data/top_puzzle.json

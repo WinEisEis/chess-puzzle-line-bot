@@ -28,14 +28,16 @@ from linebot.v3.webhooks import (
     TextMessageContent,
 )
 
-from . import cards, lichess, store
+from . import cards, lichess, store, topgames
 from .config import settings
 
 log = logging.getLogger("bot")
 
 HELP_WORDS = {"", "menu", "help", "เมนู", "ช่วย"}
 DAILY_WORDS = {"daily", "today", "วันนี้"}
-THAI_ALIASES = {"เปิดเกม": "opening", "กลางเกม": "middlegame", "ท้ายเกม": "endgame", "จบเกม": "endgame"}
+THAI_ALIASES = {"เปิดเกม": "opening", "กลางเกม": "middlegame", "ท้ายเกม": "endgame", "จบเกม": "endgame",
+                "เกมดัง": "top", "ท็อป": "top"}
+TOP_WORDS = {"top", "pro", "gm"}
 
 
 def parse_command(text: str) -> str | None:
@@ -160,6 +162,7 @@ def help_text() -> str:
             f"{p} → menu\n"
             f"{p} daily → today's puzzle\n"
             f"{p} <type> → {cats}\n"
+            f"{p} top → position from the latest top games\n"
             f"(e.g. {p} endgame)")
 
 
@@ -177,6 +180,20 @@ async def make_category_puzzle(theme: str) -> tuple[FlexMessage, str]:
 async def make_daily_puzzle() -> tuple[FlexMessage, str]:
     p = await lichess.daily()
     return puzzle_message(p, "📅 Daily Puzzle"), p.id
+
+
+TOP_TITLE = "🏆 Top Game Puzzle"
+TOP_WAIT = ("⏳ กำลังให้ Stockfish วิเคราะห์เกมระดับท็อปล่าสุดอยู่ "
+            "ลองใหม่ในอีกไม่กี่นาทีนะ")
+
+
+async def make_top_puzzle() -> tuple[FlexMessage, str]:
+    p = topgames.latest()
+    if not topgames.is_fresh():
+        topgames.refresh_in_background()   # get a newer one ready for next time
+    if p is None:
+        raise LookupError("no top-game puzzle yet")
+    return puzzle_message(p, TOP_TITLE), p.id
 
 
 # ---- "think first" lock: no solution until the puzzle has been out for N minutes ----
@@ -211,15 +228,26 @@ async def push_daily_to_all() -> dict:
         log.warning("No groups registered yet – invite the bot to a group first.")
         return {"sent": 0, "groups": []}
     msg, pid = await make_daily_puzzle()
+    messages, ids = [msg], [pid]
+    # Add the top-game puzzle to the SAME push: still counts as 1 message per person.
+    top = topgames.latest()
+    if top and top.id != topgames.last_pushed():
+        messages.append(puzzle_message(top, TOP_TITLE))
+        ids.append(top.id)
     ok = []
     for gid in groups:
         try:
-            await line.push(gid, [msg])
-            mark_shown(gid, pid)
+            await line.push(gid, messages)
+            for i in ids:
+                mark_shown(gid, i)
             ok.append(gid)
         except Exception:  # one bad group shouldn't stop the others
             log.exception("Push to %s failed", gid)
-    return {"sent": len(ok), "groups": ok}
+    if len(ids) > 1 and ok:
+        topgames.mark_pushed(ids[1])
+    if not topgames.is_fresh():
+        topgames.refresh_in_background()
+    return {"sent": len(ok), "groups": ok, "puzzles": ids}
 
 
 # --------------------------------------------------------------------------- events
@@ -239,6 +267,9 @@ async def _reply_puzzle(event, build) -> None:
     """Fetch a puzzle, reply with its card, and start its solution timer for this chat."""
     try:
         msg, pid = await build()
+    except LookupError:   # top-game puzzle still being analysed
+        await line.reply(event.reply_token, [TextMessage(text=TOP_WAIT)])
+        return
     except Exception:
         log.exception("Failed to fetch puzzle")
         await line.reply(event.reply_token,
@@ -285,6 +316,8 @@ async def handle_event(event) -> None:
             await _reply_puzzle(event, lambda: make_category_puzzle(cmd))
         elif cmd in DAILY_WORDS:
             await _reply_puzzle(event, make_daily_puzzle)
+        elif cmd in TOP_WORDS:
+            await _reply_puzzle(event, make_top_puzzle)
         elif cmd in HELP_WORDS:
             await line.reply(event.reply_token, [menu_message()])
         else:  # "/chess something-unknown" → show how to use it
@@ -304,6 +337,8 @@ async def handle_event(event) -> None:
             await _reply_puzzle(event, lambda: make_category_puzzle(data["t"]))
         elif action == "daily":
             await _reply_puzzle(event, make_daily_puzzle)
+        elif action == "top":
+            await _reply_puzzle(event, make_top_puzzle)
 
 
 async def _one(coro) -> list:
